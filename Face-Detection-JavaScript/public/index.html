@@ -1,0 +1,572 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <title>Image Upload</title>
+  <script defer src="face-api.min.js"></script>
+  <script type="module" crossorigin="anonymous">
+    import * as visionModules from 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3';
+
+    const { FaceLandmarker, FilesetResolver, DrawingUtils, ImageEmbedder } = visionModules;
+    const imageBlendShapes = document.getElementById("batch1/cicd meme.jpeg");
+
+    let faceLandmarker;
+    let imageEmbedderObj;
+    let runningMode = "IMAGE";
+
+    // Load libs: Resolves the files required for the MediaPipe Task APIs.
+    async function createFaceLandmarker() { 
+      const filesetResolver = await FilesetResolver.forVisionTasks(
+        "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/wasm"
+      );
+      faceLandmarker = await FaceLandmarker.createFromOptions(filesetResolver, {
+        baseOptions: {
+          modelAssetPath: `https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task`,
+          delegate: "GPU"
+        },
+        outputFaceBlendshapes: true,
+        runningMode,
+        numFaces: 1, 
+        minFaceDetectionConfidence: 0.5	
+      });
+    }
+
+    // This lib is for Image sim. comparer
+    async function createImageEmbedder() {
+      const vision = await FilesetResolver.forVisionTasks(
+        "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/wasm"
+      );
+      imageEmbedderObj = await ImageEmbedder.createFromOptions(vision, {
+        baseOptions: {
+          modelAssetPath: `https://storage.googleapis.com/mediapipe-models/image_embedder/mobilenet_v3_small/float32/1/mobilenet_v3_small.tflite`
+        },
+        runningMode: "IMAGE",
+        // quantize: true
+      });
+    }
+    await createFaceLandmarker();
+    await createImageEmbedder()
+
+    console.log('loaded all libs')
+
+
+    const imageContainers = document.getElementById("batch1Images").children;
+    const imageContainers2 = document.getElementById("batch2Images").children;
+
+      for (let imageContainer of imageContainers) {
+      // Add event listener to the child element which is the img element.
+      let imageId = imageContainer.className
+      imageContainer.addEventListener("click", (e) => handleClick(e, imageId));
+    }
+
+    for (let imageContainer of imageContainers2) {
+      // Add event listener to the child element whichis the img element.
+      let imageId = imageContainer.className
+      imageContainer.addEventListener("click", (e) => handleClick(e, imageId));
+    }
+
+    // When an image is clicked, let's detect it and display results!
+    async function handleClick(event, imageId) {
+      console.log('Clicked! ', imageId)
+      if (!imageEmbedderObj) return
+      if (!faceLandmarker) {
+        console.log("Wait for faceLandmarker to load before clicking!");
+        return;
+      }
+
+      runningMode = "IMAGE";
+      
+      // Set option (Explicitly) to Image as we are focussed on the image here:
+      await faceLandmarker.setOptions({ runningMode });
+      await imageEmbedderObj.setOptions({ runningMode: runningMode });
+
+      // If we clicked before and a canvas was drawn, remove all them
+      const removeCanvasIfExisting = event.target.parentNode.getElementsByClassName(`overlay-canvas-${imageId}`)
+      for (var i = removeCanvasIfExisting.length - 1; i >= 0; i--) {
+        const n = allCanvas[i];
+        n.parentNode.removeChild(n);
+      }
+      // We can call faceLandmarker.detect as many times as we like with
+      // different image data each time. This returns a promise
+      // which we wait to complete and then call a function to
+      // print out the results of the prediction.
+
+      const faceLandmarkerResult = faceLandmarker.detect(event.target);
+      let clickedImage = document.getElementById(imageId)
+
+      // Time to draw Canvas
+      const canvas = document.createElement("canvas");
+      canvas.setAttribute("class", "canvas");
+
+      canvas.height = `${clickedImage.height}`;
+      canvas.width = `${clickedImage.width}`;
+
+      canvas.style.height = `${clickedImage.height}px`;
+      canvas.style.width = `${clickedImage.width}px`;
+
+      // This should overlay our image that was clicked
+      const overlayContext = canvas.getContext("2d");
+
+
+      const overlayCanvas = document.createElement("canvas");
+      overlayCanvas.className = `overlay-canvas-${imageId}`;
+      overlayCanvas.width = canvas.width;
+      overlayCanvas.height = canvas.height;
+      overlayCanvas.style.width = `${canvas.width}px`;
+      overlayCanvas.style.height = `${canvas.height}px`;
+      overlayCanvas.position = 'absolute'; // absolute positioning
+      overlayCanvas.style.top = '0'; // its position on the image 
+      overlayCanvas.style.left = '0'; // its position on the image 
+
+      const ctx = canvas.getContext("2d")
+      // overlayCanvas.getContext("2d").drawImage(canvas, 0, 0);
+
+      canvas.style.position = 'absolute'
+      canvas.setAttribute('id', imageId) // id to ref later if needed
+
+      event.target.parentNode.appendChild(canvas); // Append it to our parentNode, ie, our img element
+
+      const drawingUtils = new DrawingUtils(ctx);
+     
+      console.log('Data points for Face:  ', faceLandmarkerResult.faceLandmarks) // We have received data points
+
+      // This is a downloadable link for who is interested in the data 
+      const jsonContent = JSON.stringify(faceLandmarkerResult.faceLandmarks);
+      const blob = new Blob([jsonContent], { type: 'text/plain' });
+
+      // Create a URL for the Blob
+      const blobURL = URL.createObjectURL(blob);
+
+      // Create a downloadable link
+      const link = document.createElement('a');
+      link.href = blobURL;
+      link.download = 'faceLandmarks.txt';
+      link.textContent = 'Download Face Landmarks Data ' + 'for image clicked: ' + imageId;
+
+      let dEle = document.querySelector('.download-data')
+      // cleanup
+      while (dEle.firstChild) {
+        dEle.removeChild(dEle.firstChild); // I want to display only one link at a time.
+      }
+      dEle.appendChild(link)
+
+      // This marks the end of downloadable links section:
+
+      // For every data we received, draw them onto our Canvas
+      for (const landmarks of faceLandmarkerResult.faceLandmarks) {
+        drawingUtils.drawConnectors(
+          landmarks,
+          FaceLandmarker.FACE_LANDMARKS_TESSELATION,
+          { color: "#C0C0C070", lineWidth: 1 }
+        );
+        drawingUtils.drawConnectors(
+          landmarks,
+          FaceLandmarker.FACE_LANDMARKS_RIGHT_EYE,
+          { color: "#FF3030" }
+        );
+        drawingUtils.drawConnectors(
+          landmarks,
+          FaceLandmarker.FACE_LANDMARKS_RIGHT_EYEBROW,
+          { color: "#FF3030" }
+        );
+        drawingUtils.drawConnectors(
+          landmarks,
+          FaceLandmarker.FACE_LANDMARKS_LEFT_EYE,
+          { color: "#30FF30" }
+        );
+        drawingUtils.drawConnectors(
+          landmarks,
+          FaceLandmarker.FACE_LANDMARKS_LEFT_EYEBROW,
+          { color: "#30FF30" }
+        );
+        drawingUtils.drawConnectors(
+          landmarks,
+          FaceLandmarker.FACE_LANDMARKS_FACE_OVAL,
+          { color: "#E0E0E0" }
+        );
+        drawingUtils.drawConnectors(landmarks, FaceLandmarker.FACE_LANDMARKS_LIPS, {
+          color: "#E0E0E0"
+        });
+        drawingUtils.drawConnectors(
+          landmarks,
+          FaceLandmarker.FACE_LANDMARKS_RIGHT_IRIS,
+          { color: "#FF3030" }
+        );
+        drawingUtils.drawConnectors(
+          landmarks,
+          FaceLandmarker.FACE_LANDMARKS_LEFT_IRIS,
+          { color: "#30FF30" }
+        );
+      }
+      drawBlendShapes(clickedImage, faceLandmarkerResult.faceBlendshapes);
+
+    }
+
+
+    // This is reference our Similarity checker button and add an click evt. listener
+    const simButton = document.getElementById('sim-image');
+    simButton.addEventListener('click', (e) => calcSim())
+
+
+    // Slider to control the threshold we desire
+    // Get references to the slider and value span elements
+    const slider = document.getElementById("similarity-slider");
+    const sliderValue = document.getElementById("slider-value");
+
+
+    // Add an input event listener to the slider
+    slider.addEventListener("input", function () {
+      // Get the current value of the slider
+      const value = parseFloat(slider.value).toFixed(2);
+
+      // Update the value displayed next to the slider
+      sliderValue.textContent = value;
+    });
+
+
+    // This is where we do calculations for similarity
+    function calcSim() {
+      let simB = document.querySelector('.batch-container')
+      simB.style.display = 'none'
+
+      let s1 = document.querySelector(".set1")
+      let s2 = document.querySelector(".set2")
+      let [set1ExistigIfAny, ...rest1] = s1.children // first ele would be my heading
+      let [set2ExistigIfAny, ...rest2] = s2.children // first ele would be my heading here as well
+      // Remove previous results
+      rest1.map(ele => s1.removeChild(ele))
+      rest2.map(ele => s2.removeChild(ele))
+      
+      let allBatch1s = [] // an array to maintain
+      let allBatch2s = []
+
+      let allBatch1ImagesArr = [] // an array to just maintain ids -> could be refactored
+      let allBatch2ImagesArr = []
+
+      for (const child of batch1Images.children) {
+        // Do something with each child element
+        if (child.children[0]) {
+          allBatch1s.push(imageEmbedderObj.embed(child.children[0]))
+          allBatch1ImagesArr.push(child.children[0].id)
+        }
+      }
+      for (const child of batch2Images.children) {
+        // Do something with each child element
+        if (child.children[0]) {
+          allBatch2s.push(imageEmbedderObj.embed(child.children[0]))
+          allBatch2ImagesArr.push(child.children[0].id)
+
+        }
+      } 
+
+
+      // For every img element in Batch 1 (set1), compare them with another elemet in Batch(2) set(2)
+      allBatch1s.map((image1EmbEle, i1) => {
+        allBatch2s.map((image2EmbEle, i2) => {
+          //Cosine similarity is used as a metric in different machine learning algorithms like the KNN for determining the distance between the neighbors, in recommendation systems, it is used to recommend movies with the same similarities and for textual data, it is used to find the similarity of texts in the document.
+          // Ref here: https://developers.google.com/mediapipe/api/solutions/java/com/google/mediapipe/tasks/components/utils/CosineSimilarity
+          let similarity = ImageEmbedder.cosineSimilarity(
+            image1EmbEle.embeddings[0],
+            image2EmbEle.embeddings[0]
+          );
+
+          // Our control on the results
+          if (similarity >= Number(sliderValue.textContent)) {
+            let b1ImageClone = document.getElementById(allBatch1ImagesArr[i1]).cloneNode(true)
+            let leftMatchDiv = document.querySelector('.set1').appendChild(b1ImageClone)
+            let b2ImageClone = document.getElementById(allBatch2ImagesArr[i2]).cloneNode(true)
+            let rightMatchDiv = document.querySelector('.set2').appendChild(b2ImageClone)
+            console.log('Similar found for threshold: ' + Number(sliderValue.textContent))
+          }
+
+          else {
+            console.log('nothing similarity found for given threshold')
+            if (s1.children.length === 1) {
+              let info = document.createElement('p')
+              info.className = 'infoParagraph'
+              info.textContent = "Couldn't find matching images, retry with another set"
+              document.querySelector('.set1').appendChild(info)
+            }
+
+          }
+        })
+      })
+    }
+    // Draw shapes on canvas
+    function drawBlendShapes(el, blendShapes) {
+      if (!blendShapes.length) {
+        return;
+      }
+
+      console.log(blendShapes);
+
+      // this lists details - use them later to print analysis data on page
+      let htmlMaker = "";
+      blendShapes[0].categories.map((shape) => {
+        console.log(shape)
+
+        htmlMaker += `
+      <li class="blend-shapes-item">
+        <span class="blend-shapes-label">${
+          shape.displayName || shape.categoryName
+          }</span>
+        <span class="blend-shapes-value" style="width: calc(${
+          +shape.score * 100
+          }% - 120px)">${(+shape.score).toFixed(4)}</span>
+      </li>
+    `;
+      });
+
+      el.innerHTML = htmlMaker;
+    }
+
+  </script>
+
+  <script type="module" src="script.js"></script>
+
+  <style>
+    /* Overlay styles */
+    .overlay {
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background-color: rgba(0, 0, 0, 0.7);
+      z-index: 999;
+      justify-content: center;
+      align-items: center;
+    } 
+
+    body {
+      background: lightsalmon;
+    }
+
+    .overlay img {
+      max-width: 80%;
+      max-height: 80%;
+    }
+
+    .close-button {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      color: white;
+      font-size: 24px;
+      cursor: pointer;
+    }
+
+    .batch-container {
+      display: flex;
+      justify-content: space-between;
+      background: aquamarine;
+    }
+
+    #results-container {
+      border-top: 2px black thick;
+      background: lightpink;
+      width: 100%;
+      display: flex;
+
+    }
+
+    .set1,
+    .set2 {
+      flex: 1;
+      padding: 20px;
+    }
+
+    .batch {
+      flex: 1;
+      padding: 20px;
+    }
+
+    .divider {
+      border-left: 2px solid black;
+      height: 100%;
+      margin: 0 20px;
+    }
+
+    .batch-images {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      align-items: flex-start;
+    }
+
+    .batch-image {
+      width: 150px;
+      height: 150px;
+      margin: 10px;
+    }
+  </style>
+</head>
+
+<body>
+  <h1>Image Upload</h1>
+  <form id="uploadForm" action="/upload" method="post" enctype="multipart/form-data">
+    <input type="file" name="uploadedFile" id="fileInput" accept=".jpg, .jpeg, .png">
+    <button type="submit">Upload</button>
+  </form>
+  <div id="message"></div>
+
+  <input type="range" id="similarity-slider" min="-1" max="1" step="0.01" value="0.50">
+  <span id="slider-value">0.50</span>
+
+  <div> Compare images
+    <button type="button" id="sim-image"> Compare similiarity </button>
+  </div>
+
+
+  <!-- Overlay -->
+  <div class="overlay" id="overlay">
+    <span class="close-button" id="closeButton">&times;</span>
+    <img id="uploadedImageOverlay">
+  </div>
+
+  <div class="download-data"> Download data </div>
+  <div class="batch-container">
+    <div class="batch">
+      <h2>Batch 1</h2>
+      <input type="checkbox" id="batch1Checkbox">
+      <div class="batch-images" id="batch1Images"></div> <!-- Batch 1  images container-->
+    </div>
+    <div class="divider"></div>
+    <div class="batch">
+      <h2>Batch 2</h2>
+      <input type="checkbox" id="batch2Checkbox">
+      <div class="batch-images" id="batch2Images"></div> <!-- Batch 2  images container-->
+    </div>
+  </div>
+
+  <!-- Create a space for displaying the results -->
+  <div id="results-container">
+    <div class="set1">
+      <h2>Matching with </h2>
+    </div>
+    <div class="divider"></div>
+    <div class="set2">
+      <h2>This image</h2>
+    </div>
+  </div>
+
+
+  <script>
+    const uploadForm = document.getElementById('uploadForm');
+    const fileInput = document.getElementById('fileInput');
+    const message = document.getElementById('message');
+    const overlay = document.getElementById('overlay');
+    const closeButton = document.getElementById('closeButton');
+    const uploadedImageOverlay = document.getElementById('uploadedImageOverlay');
+
+    uploadForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+
+      const formData = new FormData();
+      formData.append('uploadedFile', fileInput.files[0]);
+      formData.append('batch1', batch1Checkbox.checked)
+      formData.append('batch2', batch2Checkbox.checked)
+
+      try {
+        const response = await fetch('/upload', {
+          method: 'POST',
+          body: formData,
+        });
+        const result = await response.text();
+        message.textContent = result;
+
+        if (response.ok) {
+          uploadedImageOverlay.src = URL.createObjectURL(fileInput.files[0]);
+          overlay.style.display = 'flex';
+        }
+      } catch (error) {
+        console.error(error);
+        message.textContent = 'An error occurred.';
+      }
+    });
+
+    closeButton.addEventListener('click', () => {
+      overlay.style.display = 'none';
+      uploadedImageOverlay.src = '';
+    });
+
+    const batch1Checkbox = document.getElementById('batch1Checkbox');
+    const batch2Checkbox = document.getElementById('batch2Checkbox');
+
+    const batch1Images = document.getElementById('batch1Images');
+    const batch2Images = document.getElementById('batch2Images');
+
+
+    async function fetchAndDisplayImages() {
+      const response = await fetch('/get-uploaded-images');
+      const data = await response.json();
+      data.forEach(batch => {
+        const imageGrid = document.getElementById(`${batch.path}Images`);
+
+        batch.images.forEach(image => {
+          const divContainer = document.createElement('div')
+          divContainer.className = `${batch.path}/${image}`
+          divContainer.position = 'relative'
+          divContainer.style.display = 'flex'
+          divContainer.style.margin = '10px'
+
+          const imgElement = document.createElement('img');
+          imgElement.src = `/uploaded-images/${batch.path}/${image}`;
+          imgElement.alt = image;
+          imgElement.height = 400
+          imgElement.width = 400
+          imgElement.id = `${batch.path}/${image}`
+          imgElement.style.cursor = 'pointer'
+          divContainer.appendChild(imgElement)
+          imageGrid.appendChild(divContainer);
+        });
+      });
+    }
+
+    fetchAndDisplayImages();
+
+    // Display in Grid starts
+    uploadForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const formData = new FormData();
+      formData.append('uploadedFile', fileInput.files[0]);
+
+      try {
+        const response = await fetch('/upload', {
+          method: 'POST',
+          body: formData,
+        });
+        const result = await response.text();
+        message.textContent = result;
+
+        if (response.ok) {
+          window.location.reload() // refresh
+          const imageSrc = URL.createObjectURL(fileInput.files[0]);
+
+          if (batch1Checkbox.checked) {
+            const imageElement = document.createElement('img');
+            imageElement.src = imageSrc;
+            imageElement.style.cursor = 'pointer'
+            imageElement.classList.add('batch-image');
+            batch1Images.appendChild(imageElement);
+          }
+
+          if (batch2Checkbox.checked) {
+            const imageElement = document.createElement('img');
+            imageElement.src = imageSrc;
+            imageElement.style.cursor = 'pointer'
+            imageElement.classList.add('batch-image');
+            batch2Images.appendChild(imageElement);
+          }
+        }
+      } catch (error) {
+        console.error(error);
+        message.textContent = 'An error occurred.';
+      }
+    });
+    // Display in Grid ends
+  </script>
+</body>
+
+</html>x
